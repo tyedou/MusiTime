@@ -9,11 +9,12 @@
     <script src="../static/script.js"></script>
 </head>
 <body>
-    <div class="sidebar">
+    <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()" aria-label="Toggle sidebar">&#9776;</button>
+    <div class="sidebar" id="sidebar">
         <h2>Our Team</h2>
         <ul>
             <li><a href="https://www.linkedin.com/in/chase-quigley-1ab310245/" rel="noopener" target="_blank">Chase</a></li>
-            <img src="../static/photos/chase.jpg" style="height: auto; aspect-ratio: 1 / 1; object-fit: cover;"> <!-- Ensuring consistent crop and size -->
+            <img src="../static/photos/chase.jpg" style="height: auto; aspect-ratio: 1 / 1; object-fit: cover;">
             <li><a href="https://linkedin.com/in/mahdi-almosawi-49880b251/" rel="noopener" target="_blank">Mahdi</a></li>
             <img src="../static/photos/mahdi.jpg">
             <li><a href="https://www.linkedin.com/in/abdu114hh/" rel="noopener" target="_blank">Abdullah</a></li>
@@ -22,7 +23,7 @@
             <img src="../static/photos/tyler.jpg">
         </ul>
     </div>
-    <div class="content">
+    <div class="content" id="content">
         <h1 class="centered-title">MusiTime</h1>
         <p>For a full list of Spotify Genres: <a href="https://gist.github.com/andytlr/4104c667a62d8145aa3a" rel="noopener" target="_blank">Click Here</a></p>
         <div class="form-container">

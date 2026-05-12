@@ -10,15 +10,15 @@ from utils import Song
 load_dotenv()
 SPOTIPY_CLIENT_ID = os.getenv("CLIENT_ID")
 SPOTIPY_CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-redirect_uri = "http://localhost:8888/callback"
+redirect_uri = "http://127.0.0.1:8888/callback"
 OFFSET = 120 # this offset is what is used in the determining songs to add to playlist
 
 # set up a spotify class so that we can access user information
 # uses client_id for the app and client_secret to connect
 
 # OAuth Method for accessing Spotify Data (individual user accounts, browser verification required)
-scope = ["playlist-modify-public", "playlist-modify-private", "user-top-read", "playlist-read-private", "user-library-read"]
-def OAuth(user: str):     
+scope = ["playlist-modify-public", "playlist-modify-private", "user-top-read", "playlist-read-private", "user-library-read", "user-read-private", "user-read-email"]
+def OAuth(user: str):
     global sp
     token = util.prompt_for_user_token(username=user, scope=scope, client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET, redirect_uri=redirect_uri, cache_path=".cache")
     sp = Spotify(auth=token)
@@ -73,13 +73,19 @@ def create_playlist() -> None:
         return
     
 # 04/17/24 -- Works
-def _user_has_playlist(user_id, playlist_name): # working
-    playlists = sp.user_playlists(user_id)
-    for playlist in playlists['items']:
-        if playlist['name'] == playlist_name:
-            return playlist['id']
-    # print("_user_has_playlist ends here...")
-    return 
+def _user_has_playlist(user_id, playlist_name):
+    # paginate through the authenticated user's own playlists (/me/playlists);
+    # /users/{id}/playlists returns 403 for apps still in Developer Mode
+    offset = 0
+    while True:
+        playlists = sp.current_user_playlists(limit=50, offset=offset)
+        items = playlists.get('items', [])
+        for playlist in items:
+            if playlist['name'] == playlist_name:
+                return playlist['id']
+        if len(items) < 50:
+            return None
+        offset += 50
 # 04/17/24 -- Works
 def _clear_playlist(playlist_id):   # working
     # Get all tracks in the playlist
@@ -102,11 +108,16 @@ def _get_OPTION(songs: list, OPTION: str) -> list: # function returns id's of so
     # print("_get_OPTION ends here...")
     return return_list
 # 04/17/24 -- Works
-def add_to_playlist(songs: list) -> None: # always the MusiTime playlist; assumes list being passed is ID's 
-    # _clear_playlist(_user_has_playlist(user, "MusiTime"))
+def add_to_playlist(songs: list) -> None: # always the MusiTime playlist; assumes list being passed is ID's
+    print(f"[add_to_playlist] user={user!r} count={len(songs)} ids={songs[:5]}...")
     create_playlist()
-    sp.user_playlist_add_tracks(user=user,playlist_id=_user_has_playlist(user, "MusiTime"), tracks=songs, position=None)
-    # print("add_to_playlist ends here...")
+    playlist_id = _user_has_playlist(user, "MusiTime")
+    print(f"[add_to_playlist] playlist_id={playlist_id!r}")
+    if not songs:
+        print("[add_to_playlist] WARNING: empty song list — playlist will be empty")
+        return
+    sp.user_playlist_add_tracks(user=user, playlist_id=playlist_id, tracks=songs, position=None)
+    print(f"[add_to_playlist] added {len(songs)} tracks")
 
 
 
@@ -119,33 +130,94 @@ def get_artist_id(artists):
                 if (len(artist_ids) < 5):
                     artist_ids.append(item['id'])
     return artist_ids
-# 04/17/24 -- Working
+# Spotify deprecated /v1/recommendations in Nov 2024. The functions below now
+# build a candidate pool via search / artist top-tracks instead of the recs API.
 def rec_artists_songs(artists: list) -> list:
-    artists = get_artist_id(artists)
-    recommendations = sp.recommendations(seed_artists=artists, limit=100)
+    artist_ids = get_artist_id(artists)
     recs = []
-    for track in recommendations['tracks']:
-        recs.append(track['id'])
-    # print("rec_artists_songs ends here...")
+    seen = set()
+    for aid in artist_ids:
+        try:
+            results = sp.artist_top_tracks(aid)
+        except Exception:
+            continue
+        for track in results.get('tracks', []):
+            tid = track.get('id')
+            if tid and tid not in seen:
+                seen.add(tid)
+                recs.append(tid)
     return recs
-# 04/17/24 -- Works
+
 def rec_genre_songs(genres: list) -> list:
-    recommendations = sp.recommendations(seed_genres=genres, limit=100)
     recs = []
-    for track in recommendations['tracks']:
-        recs.append(track['id'])
-    # print("rec_genre_songs ends here...")
+    seen = set()
+    for genre in genres:
+        genre = genre.strip()
+        if not genre:
+            continue
+        success_query = None
+        for query in (f'genre:"{genre}"', genre):
+            try:
+                results = sp.search(q=query, type='track', limit=10)
+                print(f"[rec_genre_songs] query={query!r} returned {len(results.get('tracks', {}).get('items', []))} items")
+            except Exception as e:
+                print(f"[rec_genre_songs] query={query!r} failed: {e}")
+                continue
+            items = results.get('tracks', {}).get('items', [])
+            if items:
+                success_query = query
+                for track in items:
+                    tid = track.get('id')
+                    if tid and tid not in seen:
+                        seen.add(tid)
+                        recs.append(tid)
+                break
+        # paginate to grow the pool past the dev-mode per-call cap
+        if success_query:
+            for offset in (10, 20, 30, 40):
+                try:
+                    results = sp.search(q=success_query, type='track', limit=10, offset=offset)
+                except Exception:
+                    break
+                items = results.get('tracks', {}).get('items', [])
+                if not items:
+                    break
+                for track in items:
+                    tid = track.get('id')
+                    if tid and tid not in seen:
+                        seen.add(tid)
+                        recs.append(tid)
     return recs
-# 04/17/24 -- Working
-def rec_ttracks_songs() -> list:        # recommends top tracks
-    songs = sp.current_user_top_tracks(limit=5, time_range="long_term")
-    songs = _get_OPTION(songs, "id")
-    recomendations = sp.recommendations(seed_tracks=songs, limit=100)
+
+def rec_ttracks_songs() -> list:
+    top = sp.current_user_top_tracks(limit=20, time_range="long_term")
+    artist_ids = []
+    seen_artists = set()
+    for item in top.get('items', []):
+        for artist in item.get('artists', []):
+            aid = artist.get('id')
+            if aid and aid not in seen_artists and len(artist_ids) < 5:
+                seen_artists.add(aid)
+                artist_ids.append(aid)
     recs = []
-    for track in recomendations['tracks']:
-        # print(track['name'])
-        recs.append(track['id'])
-    # print("rec_songs ends here...")
+    seen = set()
+    # seed with the user's own top tracks
+    for item in top.get('items', []):
+        tid = item.get('id')
+        if tid and tid not in seen:
+            seen.add(tid)
+            recs.append(tid)
+    # expand with top tracks from those artists
+    for aid in artist_ids:
+        try:
+            results = sp.artist_top_tracks(aid)
+        except Exception:
+            continue
+        for track in results.get('tracks', []):
+            tid = track.get('id')
+            if tid and tid not in seen:
+                seen.add(tid)
+                recs.append(tid)
     return recs
     
 # 04/17/24 -- works-ish; not perfect, not bad
@@ -194,13 +266,16 @@ def find_songs_in_length(recs: list, goal_length: int, long_to_short: bool = Non
 def set_up(username: str): # FOR USAGE WITH: flask_TEST.py
     global sp
     global user
-    user = username
-    return OAuth(user=user)
+    OAuth(user=username)
+    me = sp.current_user()
+    user = me['id']
+    print(f"[set_up] form_user={username!r} authenticated_as={user!r} country={me.get('country')!r} product={me.get('product')!r}")
+    return sp
 
 # 04/17/24 -- Works
 def main():                 # FOR USAGE WITH: main.py; DRIVER CODE to TEST functions
     global user
-    user = "chasequigley9"
+    user = "edouardtyler"
     sp=OAuth(user=user)
     recs = rec_ttracks_songs()
     # recs = rec_genre_songs(["pop", "country", "hip-hop"])
